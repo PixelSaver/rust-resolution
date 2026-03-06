@@ -1,4 +1,5 @@
 use std::io;
+use serde::Deserialize;
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind};
 use ratatui::{
     buffer::Buffer,
@@ -10,7 +11,7 @@ use ratatui::{
     DefaultTerminal, Frame,
 };
 use color_eyre::{
-    eyre::{bail, WrapErr},
+    eyre::WrapErr,
     Result,
 };
 
@@ -25,11 +26,80 @@ fn main() -> color_eyre::Result<()> {
     app_result
 }
 
+#[derive(Debug)]
+pub struct GithubClient {
+    // token: String,
+    client: reqwest::blocking::Client,
+}
+
+impl GithubClient {
+    pub fn new(token: String) -> Self {
+        Self {
+            // token,
+            client: reqwest::blocking::Client::new(),
+        }
+    }
+    pub fn get_repos(&self, username: &str) -> Result<Vec<Repo>> {
+        let url = format!("https://api.github.com/users/{username}/repos");
+        
+        let response = self.client
+            .get(&url)
+            .header("User-Agent", "rust-tui")
+            .send()?;
+    
+        // println!("Status: {}", response.status());
+    
+        let text = response.text()?;
+        // println!("Body:\n{}", text);
+    
+        let repos: Vec<Repo> = serde_json::from_str(&text)?;
+    
+        Ok(repos)
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct Repo {
+    pub name: String,
+    pub full_name: String,
+    pub description: Option<String>,
+}
+
+impl Default for App {
+    fn default() -> Self {
+        Self {
+            github: GithubClient::new(String::new()),
+            state: AppState::default(),
+            input: String::new(),
+            repos: Vec::new(),
+            selected: 0,
+            username: String::new(),
+            exit: false,
+        }
+    }
+}
+
 /// Appstate
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct App {
-    counter: u8,
+    github: GithubClient,
+    state: AppState,
+    input: String,
+    repos: Vec<Repo>,
+    selected: usize,
+    username: String,
     exit: bool,
+}
+
+#[derive(Debug)]
+pub enum AppState {
+    EnterUsername,
+    ShowRepos,
+}
+impl Default for AppState {
+    fn default() -> Self {
+        Self::EnterUsername
+    }
 }
 
 impl App {
@@ -59,11 +129,38 @@ impl App {
         Ok(())
     }
     fn handle_key_event(&mut self, key_event: KeyEvent) -> color_eyre::Result<()> {
-        match key_event.code {
-            KeyCode::Char('q') => self.exit(),
-            KeyCode::Left => self.decrement_counter(),
-            KeyCode::Right => self.increment_counter()?,
-            _ => {}
+        match self.state {
+            AppState::EnterUsername => match key_event.code {
+                KeyCode::Char(c) => self.input.push(c),
+                KeyCode::Backspace => { self.input.pop(); }
+                KeyCode::Enter => {
+                    // fetch repos
+                    match self.github.get_repos(&self.input) {
+                        Ok(repos) => {
+                            self.repos = repos;
+                            self.selected = 0;
+                            self.state = AppState::ShowRepos;
+                        }
+                        Err(e) => eprintln!("Failed to fetch repos: {e}"),
+                    }
+                }
+                KeyCode::Esc => self.exit = true,
+                _ => {}
+            },
+            AppState::ShowRepos => match key_event.code {
+                KeyCode::Up => {
+                    if self.selected > 0 { self.selected -= 1; }
+                }
+                KeyCode::Down => {
+                    if self.selected + 1 < self.repos.len() { self.selected += 1; }
+                }
+                KeyCode::Esc => {
+                    self.state = AppState::EnterUsername;
+                    self.input.clear();
+                }
+                KeyCode::Char('q') => self.exit(),
+                _ => {}
+            }
         }
         Ok(())
     }
@@ -71,45 +168,34 @@ impl App {
     fn exit(&mut self) {
         self.exit = true;
     }
-    
-    fn increment_counter(&mut self) -> Result<()> {
-        self.counter += 1;
-        if self.counter > 2 {
-            bail!("counter overflow");
-        }
-        Ok(())
-    }
-    
-    fn decrement_counter(&mut self){
-        self.counter -= 1;
-    }
 }
 
 impl Widget for &App {
     fn render(self, area: Rect, buf: &mut Buffer) {
-        let title = Line::from(" Counter App Tutorial ".bold());
-        let instructions = Line::from(vec![
-            " Decrement ".into(),
-            "<Left>".blue().bold(),
-            " Increment ".into(),
-            "<Right>".blue().bold(),
-            " Quit ".into(),
-            "<Q> ".blue().bold(),
-        ]);
-        let block = Block::bordered()
-            .title(title.centered())
-            .title_bottom(instructions.centered())
-            .border_set(border::THICK);
-
-        let counter_text = Text::from(vec![Line::from(vec![
-            "Value: ".into(),
-            self.counter.to_string().yellow(),
-        ])]);
-
-        Paragraph::new(counter_text)
-            .centered()
-            .block(block)
-            .render(area, buf);
+        match self.state {
+            AppState::EnterUsername => {
+                let title = Line::from("Enter GitHub username:".bold());
+                let input_line = Line::from(self.input.clone().yellow());
+                
+                let block = Block::bordered().title(title.centered()).border_set(border::THICK);
+                
+                Paragraph::new(Text::from(vec![input_line])).block(block).render(area, buf);
+            }
+            AppState::ShowRepos => {
+                let title = Line::from("Repositories:".bold());
+                let lines: Vec<Line> = self.repos.iter().enumerate().map(|(i, repo)| {
+                    let text = if i == self.selected {
+                        repo.name.clone().bold().green()
+                    } else {
+                        repo.name.clone().white()
+                    };
+                    Line::from(text)
+                }).collect();
+                
+                let block = Block::bordered().title(title.centered()).border_set(border::THICK);
+                Paragraph::new(Text::from(lines)).block(block).render(area, buf);
+            }
+        }
     }
 }
 
@@ -143,19 +229,19 @@ mod tests {
         assert_eq!(buf, expected);
     }
     
-    #[test]
-    fn handle_key_event() {
-        let mut app = App::default();
-        app.handle_key_event(KeyCode::Right.into()).unwrap();
-        assert_eq!(app.counter, 1);
+    // #[test]
+    // fn handle_key_event() {
+    //     let mut app = App::default();
+    //     app.handle_key_event(KeyCode::Right.into()).unwrap();
+    //     assert_eq!(app.counter, 1);
 
-        app.handle_key_event(KeyCode::Left.into()).unwrap();
-        assert_eq!(app.counter, 0);
+    //     app.handle_key_event(KeyCode::Left.into()).unwrap();
+    //     assert_eq!(app.counter, 0);
 
-        let mut app = App::default();
-        app.handle_key_event(KeyCode::Char('q').into()).unwrap();
-        assert!(app.exit);
-    }
+    //     let mut app = App::default();
+    //     app.handle_key_event(KeyCode::Char('q').into()).unwrap();
+    //     assert!(app.exit);
+    // }
     
     #[test]
     #[should_panic(expected = "attempt to subtract with overflow")]

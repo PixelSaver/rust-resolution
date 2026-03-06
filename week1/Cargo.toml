@@ -10,6 +10,8 @@ color-eyre = "0.6.3"
 crossterm = "0.29.0"
 ratatui = "0.30.0"
 tui = "0.19.0"
+tokio = "1.50.0"
+serde_json = "1.0.149"
 
 [profile.release]
 codegen-units = 1
