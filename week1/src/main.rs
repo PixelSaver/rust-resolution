@@ -5,9 +5,9 @@ use ratatui::{
     DefaultTerminal, Frame,
     buffer::Buffer,
     layout::Rect,
-    style::Stylize,
+    style::{Stylize, Style},
     symbols::border,
-    text::{Line, Text},
+    text::{Line, Text, Span},
     widgets::{Block, Paragraph, Widget},
 };
 use serde::{Deserialize, Serialize};
@@ -373,12 +373,26 @@ impl Widget for &App {
                     .enumerate()
                     .map(|(i, repo)| {
                         let abs_idx = start + i;
-                        let text = if abs_idx == self.selected {
+                        let name = if abs_idx == self.selected {
                             repo.name.clone().bold().green()
                         } else {
                             repo.name.clone().white()
                         };
-                        Line::from(text)
+                
+                        // create right-side info
+                        let info = format!("★ {}  ⎇ {}  👁 {}", 
+                            repo.stargazers_count, 
+                            repo.forks_count, 
+                            repo.watchers_count, 
+                            // repo.language.as_deref().unwrap_or("-")
+                        );
+                
+                        // compute padding to right-align info
+                        let total_width = area.width as usize - 4; // subtract borders
+                        let padding = total_width.saturating_sub(repo.name.len() + info.len());
+                        let line_text = format!("{}{}{}", name, " ".repeat(padding), info);
+                
+                        Line::from(line_text)
                     })
                     .collect();
                 let lines = if visible_repos.is_empty() {
@@ -394,16 +408,13 @@ impl Widget for &App {
                     .iter()
                     .filter_map(|r| r.last_updated.as_ref())
                     .min()
-                    .map(|s| s.as_str());
+                    .map(|s| Repo::time_ago(s).unwrap_or_else(|| "Never".to_string()));
                 let refresh_info = if self.refreshing {
                     " |  Refreshing...  ".to_string()
                 } else if let Some(time_stamp) = earliest_refresh {
-                    format!(
-                        " |  Last refreshed: {} ",
-                        Repo::time_ago(time_stamp).unwrap_or_else(|| "Never".to_string())
-                    )
+                    format!(" |  Last refreshed: {}  ", time_stamp)
                 } else {
-                    "Never refreshed".to_string()
+                    " |  Never refreshed  ".to_string()
                 };
 
                 let block = Block::bordered()
