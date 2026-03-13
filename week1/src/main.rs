@@ -1,21 +1,18 @@
-use std::{collections::HashMap, fs, path::PathBuf};
-use serde::{Deserialize, Serialize};
+use color_eyre::{Result, eyre::WrapErr};
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind};
 use ratatui::{
+    DefaultTerminal, Frame,
     buffer::Buffer,
     layout::Rect,
     style::Stylize,
     symbols::border,
     text::{Line, Text},
     widgets::{Block, Paragraph, Widget},
-    DefaultTerminal, Frame,
 };
-use color_eyre::{
-    eyre::WrapErr,
-    Result,
-};
+use serde::{Deserialize, Serialize};
+use std::{collections::HashMap, fs, path::PathBuf};
 
-type RepoMap = HashMap<String, Vec<Repo>>; 
+type RepoMap = HashMap<String, Vec<Repo>>;
 
 fn main() -> color_eyre::Result<()> {
     color_eyre::install()?;
@@ -41,7 +38,7 @@ impl GithubClient {
             .unwrap_or_default()
             .join("github-tui")
             .join("repo_cache.json");
-        
+
         if let Some(parent) = cache_path.parent() {
             fs::create_dir_all(parent).ok();
         }
@@ -63,28 +60,30 @@ impl GithubClient {
         fs::write(&self.cache_path, json)?;
         Ok(())
     }
-    pub fn get_repos(&self, username: &str) -> Result<Vec<Repo>> {
+    pub fn get_repos(&self, username: &str, force_refresh: bool) -> Result<Vec<Repo>> {
         let mut cache = self.load_cache();
-        
-        if let Some(repos) = cache.get(username) {
-            return Ok(repos.clone())
+        if !force_refresh {
+            if let Some(repos) = cache.get(username) {
+                return Ok(repos.clone());
+            }
         }
-        
+
         let url = format!("https://api.github.com/users/{username}/repos");
-        
-        let response = self.client
+
+        let response = self
+            .client
             .get(&url)
             .header("User-Agent", "rust-tui")
             .send()?;
-    
+
         // println!("Status: {}", response.status());
-    
+
         let text = response.text()?;
         let repos: Vec<Repo> = serde_json::from_str(&text)?;
-        
+
         cache.insert(username.to_string(), repos.clone());
         self.save_cache(&cache)?;
-    
+
         Ok(repos)
     }
 }
@@ -125,7 +124,7 @@ pub struct App {
 #[derive(Debug)]
 pub enum AppState {
     EnterUsername,
-    Loading,    
+    Loading,
     ShowRepos,
 }
 impl Default for AppState {
@@ -135,7 +134,6 @@ impl Default for AppState {
 }
 
 impl App {
-
     /// runs the application's main loop until the user quits
     pub fn run(&mut self, terminal: &mut DefaultTerminal) -> color_eyre::Result<()> {
         while !self.exit {
@@ -164,10 +162,16 @@ impl App {
         match self.state {
             AppState::EnterUsername => match key_event.code {
                 KeyCode::Char(c) => self.input.push(c),
-                KeyCode::Backspace => { self.input.pop(); }
+                KeyCode::Backspace => {
+                    self.input.pop();
+                }
                 KeyCode::Enter => {
                     // fetch repos
-                    match self.github.get_repos(&self.input) {
+                    if self.input.is_empty() {
+                        return Ok(());
+                    }
+                    self.username = self.input.clone();
+                    match self.github.get_repos(&self.username, false) {
                         Ok(repos) => {
                             self.repos = repos;
                             self.selected = 0;
@@ -179,27 +183,43 @@ impl App {
                 KeyCode::Esc => self.exit = true,
                 _ => {}
             },
-            AppState::Loading => {
-                
-            }
+            AppState::Loading => match key_event.code {
+                KeyCode::Char('q') => self.exit(),
+                _ => {}
+            },
             AppState::ShowRepos => match key_event.code {
                 KeyCode::Up => {
-                    if self.selected > 0 { self.selected -= 1; }
+                    if self.selected > 0 {
+                        self.selected -= 1;
+                    }
                 }
                 KeyCode::Down => {
-                    if self.selected + 1 < self.repos.len() { self.selected += 1; }
+                    if self.selected + 1 < self.repos.len() {
+                        self.selected += 1;
+                    }
                 }
                 KeyCode::Esc => {
                     self.state = AppState::EnterUsername;
                     self.input.clear();
                 }
+                KeyCode::Char('r') => {
+                    if !self.username.is_empty() {
+                        match self.github.get_repos(&self.username, true) {
+                            Ok(repos) => {
+                                self.repos = repos;
+                                self.selected = 0;
+                            }
+                            Err(e) => eprintln!("Failed to fetch repos: {e}"),
+                        }
+                    }
+                }
                 KeyCode::Char('q') => self.exit(),
                 _ => {}
-            }
+            },
         }
         Ok(())
     }
-    
+
     fn exit(&mut self) {
         self.exit = true;
     }
@@ -212,15 +232,15 @@ impl Widget for &App {
                 let title = Line::from("Enter GitHub username:".bold());
                 let instructions = Line::from(vec![
                     " Submit ".into(),
-                    "<Enter>".blue().bold(),
+                    "<enter>".blue().bold(),
                     " Quit ".into(),
-                    "<Q>".blue().into(),
+                    "<q/esc>".blue().into(),
                 ]);
                 let block = Block::bordered()
                     .title(title.centered())
                     .title_bottom(instructions.centered())
                     .border_set(border::THICK);
-                
+
                 let input_line = format!("> {}_", self.input);
                 Paragraph::new(input_line.yellow())
                     .block(block)
@@ -238,37 +258,49 @@ impl Widget for &App {
             AppState::ShowRepos => {
                 let height = area.height as usize - 2; // two rows for title and instructions
                 let selected = self.selected;
-                
+
                 let start = if selected >= height {
                     selected + 1 - height
-                } else { 0 };
+                } else {
+                    0
+                };
                 let end = usize::min(start + height, self.repos.len());
-                
+
                 let visible_repos = &self.repos[start..end];
-                
+
                 let title = Line::from("Repositories".bold());
-                
+
                 let instructions = Line::from(vec![
                     " Move ".into(),
-                    "<Up/Down>".blue().bold(),
+                    "<up/down>".blue().bold(),
+                    " Refresh ".into(),
+                    "<r>".blue().into(),
+                    " Back ".into(),
+                    "<esc>".blue().into(),
                     " Quit ".into(),
-                    "<Q>".blue().into(),
+                    "<q>".blue().into(),
                 ]);
-                let lines: Vec<Line> = visible_repos.iter().enumerate().map(|(i, repo)| {
-                    let abs_idx = start + i;
-                    let text = if abs_idx == self.selected {
-                        repo.name.clone().bold().green()
-                    } else {
-                        repo.name.clone().white()
-                    };
-                    Line::from(text)
-                }).collect();
+                let lines: Vec<Line> = visible_repos
+                    .iter()
+                    .enumerate()
+                    .map(|(i, repo)| {
+                        let abs_idx = start + i;
+                        let text = if abs_idx == self.selected {
+                            repo.name.clone().bold().green()
+                        } else {
+                            repo.name.clone().white()
+                        };
+                        Line::from(text)
+                    })
+                    .collect();
                 let lines = if visible_repos.is_empty() {
-                    vec![Line::from("No repositories found. Try someone else?".yellow())]
+                    vec![Line::from(
+                        "No repositories found. Try someone else?".yellow(),
+                    )]
                 } else {
                     lines
                 };
-                
+
                 let block = Block::bordered()
                     .title(title.centered())
                     .title_bottom(instructions.centered())
@@ -310,7 +342,7 @@ mod tests {
 
         assert_eq!(buf, expected);
     }
-    
+
     // #[test]
     // fn handle_key_event() {
     //     let mut app = App::default();
@@ -324,14 +356,14 @@ mod tests {
     //     app.handle_key_event(KeyCode::Char('q').into()).unwrap();
     //     assert!(app.exit);
     // }
-    
+
     #[test]
     #[should_panic(expected = "attempt to subtract with overflow")]
     fn handle_key_event_panic() {
         let mut app = App::default();
         let _ = app.handle_key_event(KeyCode::Left.into());
     }
-    
+
     #[test]
     fn handle_key_event_overflow() {
         let mut app = App::default();
@@ -342,6 +374,6 @@ mod tests {
                 .unwrap_err()
                 .to_string(),
             "counter overflow"
-            );
-        }
+        );
+    }
 }
