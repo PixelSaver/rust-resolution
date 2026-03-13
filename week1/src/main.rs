@@ -1,4 +1,5 @@
 use color_eyre::{Result, eyre::WrapErr};
+use chrono::{DateTime, Utc};
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind};
 use ratatui::{
     DefaultTerminal, Frame,
@@ -73,13 +74,16 @@ impl GithubClient {
         let response = self
             .client
             .get(&url)
-            .header("User-Agent", "rust-tui")
+            .header("User-Agent", "github-tui")
             .send()?;
 
         // println!("Status: {}", response.status());
 
         let text = response.text()?;
-        let repos: Vec<Repo> = serde_json::from_str(&text)?;
+        let mut repos: Vec<Repo> = serde_json::from_str(&text)?;
+        for repo in &mut repos {
+            repo.refresh_timestamp();
+        }
 
         cache.insert(username.to_string(), repos.clone());
         self.save_cache(&cache)?;
@@ -93,6 +97,22 @@ pub struct Repo {
     pub name: String,
     pub full_name: String,
     pub description: Option<String>,
+    pub html_url: String,
+    pub fork: bool,
+    pub language: Option<String>,
+    pub forks_count: u64,
+    pub stargazers_count: u64,
+    pub watchers_count: u64,
+    pub size: u64,
+    
+    /// Timestamp of last refresh in RFC3339 format
+    #[serde(default)]
+    pub last_updated: Option<String>,
+}
+impl Repo {
+    pub fn refresh_timestamp(&mut self) {
+        self.last_updated = Some(Utc::now().to_rfc3339().to_string());
+    }
 }
 
 impl Default for App {
