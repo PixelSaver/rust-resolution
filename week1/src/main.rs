@@ -115,6 +115,24 @@ impl Repo {
     }
 }
 
+/// Appstate
+#[derive(Debug)]
+pub struct App {
+    github: GithubClient,
+    state: AppState,
+    /// Input used to query username
+    input: String,
+    /// Store of all repos of a specific user
+    repos: Vec<Repo>,
+    /// Selected index
+    selected: usize,
+    username: String,
+    /// Whether or not to exit
+    exit: bool,
+    /// Visual notification when refreshing
+    refreshing: bool,
+}
+
 impl Default for App {
     fn default() -> Self {
         Self {
@@ -125,20 +143,9 @@ impl Default for App {
             selected: 0,
             username: String::new(),
             exit: false,
+            refreshing: false,
         }
     }
-}
-
-/// Appstate
-#[derive(Debug)]
-pub struct App {
-    github: GithubClient,
-    state: AppState,
-    input: String,
-    repos: Vec<Repo>,
-    selected: usize,
-    username: String,
-    exit: bool,
 }
 
 #[derive(Debug)]
@@ -158,7 +165,7 @@ impl App {
     pub fn run(&mut self, terminal: &mut DefaultTerminal) -> color_eyre::Result<()> {
         while !self.exit {
             terminal.draw(|frame| self.draw(frame))?;
-            self.handle_events().wrap_err("handle events failed")?;
+            self.handle_events(terminal).wrap_err("handle events failed")?;
         }
         Ok(())
     }
@@ -167,18 +174,18 @@ impl App {
         frame.render_widget(self, frame.area());
     }
 
-    fn handle_events(&mut self) -> color_eyre::Result<()> {
+    fn handle_events(&mut self, terminal: &mut DefaultTerminal) -> color_eyre::Result<()> {
         match event::read()? {
             // it's important to check that the event is a key press event as
             // crossterm also emits key release and repeat events on Windows.
             Event::Key(key_event) if key_event.kind == KeyEventKind::Press => self
-                .handle_key_event(key_event)
+                .handle_key_event(key_event, terminal)
                 .wrap_err_with(|| format!("handling key event failed:\n{key_event:#?}")),
             _ => Ok(()),
         }?;
         Ok(())
     }
-    fn handle_key_event(&mut self, key_event: KeyEvent) -> color_eyre::Result<()> {
+    fn handle_key_event(&mut self, key_event: KeyEvent, terminal: &mut DefaultTerminal) -> color_eyre::Result<()> {
         match self.state {
             AppState::EnterUsername => match key_event.code {
                 KeyCode::Char(c) => self.input.push(c),
@@ -224,6 +231,9 @@ impl App {
                 }
                 KeyCode::Char('r') => {
                     if !self.username.is_empty() {
+                        self.refreshing = true;
+                        terminal.draw(|f| self.draw(f)).ok();
+                        
                         match self.github.get_repos(&self.username, true) {
                             Ok(repos) => {
                                 self.repos = repos;
@@ -231,6 +241,9 @@ impl App {
                             }
                             Err(e) => eprintln!("Failed to fetch repos: {e}"),
                         }
+                        self.refreshing = false;
+                        
+                        terminal.draw(|f| self.draw(f)).ok();
                     }
                 }
                 KeyCode::Char('q') => self.exit(),
@@ -321,10 +334,13 @@ impl Widget for &App {
                     lines
                 };
 
-                let block = Block::bordered()
+                let mut block = Block::bordered()
                     .title(title.centered())
                     .title_bottom(instructions.centered())
                     .border_set(border::THICK);
+                if self.refreshing {
+                    block = block.title_bottom(Line::from("  Refreshing...  ").right_aligned());
+                };
                 Paragraph::new(Text::from(lines))
                     .block(block)
                     .render(area, buf);
