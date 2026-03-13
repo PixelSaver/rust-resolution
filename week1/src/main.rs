@@ -236,6 +236,16 @@ impl Widget for &App {
                     .render(area, buf);
             }
             AppState::ShowRepos => {
+                let height = area.height as usize - 2; // two rows for title and instructions
+                let selected = self.selected;
+                
+                let start = if selected >= height {
+                    selected + 1 - height
+                } else { 0 };
+                let end = usize::min(start + height, self.repos.len());
+                
+                let visible_repos = &self.repos[start..end];
+                
                 let title = Line::from("Repositories".bold());
                 
                 let instructions = Line::from(vec![
@@ -244,15 +254,20 @@ impl Widget for &App {
                     " Quit ".into(),
                     "<Q>".blue().into(),
                 ]);
-                
-                let lines: Vec<Line> = self.repos.iter().enumerate().map(|(i, repo)| {
-                    let text = if i == self.selected {
+                let lines: Vec<Line> = visible_repos.iter().enumerate().map(|(i, repo)| {
+                    let abs_idx = start + i;
+                    let text = if abs_idx == self.selected {
                         repo.name.clone().bold().green()
                     } else {
                         repo.name.clone().white()
                     };
                     Line::from(text)
                 }).collect();
+                let lines = if visible_repos.is_empty() {
+                    vec![Line::from("No repositories found. Try someone else?".yellow())]
+                } else {
+                    lines
+                };
                 
                 let block = Block::bordered()
                     .title(title.centered())
