@@ -12,6 +12,7 @@ ratatui = "0.30.0"
 tui = "0.19.0"
 tokio = "1.50.0"
 serde_json = "1.0.149"
+dirs = "6.0.0"
 
 [profile.release]
 codegen-units = 1

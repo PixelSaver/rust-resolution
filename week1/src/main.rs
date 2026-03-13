@@ -1,5 +1,5 @@
-use std::io;
-use serde::Deserialize;
+use std::{collections::HashMap, fs, path::PathBuf};
+use serde::{Deserialize, Serialize};
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind};
 use ratatui::{
     buffer::Buffer,
@@ -14,6 +14,8 @@ use color_eyre::{
     eyre::WrapErr,
     Result,
 };
+
+type RepoMap = HashMap<String, Vec<Repo>>; 
 
 fn main() -> color_eyre::Result<()> {
     color_eyre::install()?;
@@ -30,16 +32,44 @@ fn main() -> color_eyre::Result<()> {
 pub struct GithubClient {
     // token: String,
     client: reqwest::blocking::Client,
+    cache_path: PathBuf,
 }
 
 impl GithubClient {
     pub fn new() -> Self {
+        let cache_path = dirs::cache_dir()
+            .unwrap_or_default()
+            .join("github-tui")
+            .join("repo_cache.json");
+        
+        if let Some(parent) = cache_path.parent() {
+            fs::create_dir_all(parent).ok();
+        }
         Self {
             // token,
             client: reqwest::blocking::Client::new(),
+            cache_path,
         }
     }
+    fn load_cache(&self) -> RepoMap {
+        if let Ok(data) = fs::read_to_string(&self.cache_path) {
+            serde_json::from_str(&data).unwrap_or_default()
+        } else {
+            HashMap::new()
+        }
+    }
+    fn save_cache(&self, cache: &RepoMap) -> Result<()> {
+        let json = serde_json::to_string_pretty(cache)?;
+        fs::write(&self.cache_path, json)?;
+        Ok(())
+    }
     pub fn get_repos(&self, username: &str) -> Result<Vec<Repo>> {
+        let mut cache = self.load_cache();
+        
+        if let Some(repos) = cache.get(username) {
+            return Ok(repos.clone())
+        }
+        
         let url = format!("https://api.github.com/users/{username}/repos");
         
         let response = self.client
@@ -50,15 +80,16 @@ impl GithubClient {
         // println!("Status: {}", response.status());
     
         let text = response.text()?;
-        // println!("Body:\n{}", text);
-    
         let repos: Vec<Repo> = serde_json::from_str(&text)?;
+        
+        cache.insert(username.to_string(), repos.clone());
+        self.save_cache(&cache)?;
     
         Ok(repos)
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Repo {
     pub name: String,
     pub full_name: String,
@@ -148,6 +179,9 @@ impl App {
                 KeyCode::Esc => self.exit = true,
                 _ => {}
             },
+            AppState::Loading => {
+                
+            }
             AppState::ShowRepos => match key_event.code {
                 KeyCode::Up => {
                     if self.selected > 0 { self.selected -= 1; }
@@ -176,16 +210,41 @@ impl Widget for &App {
         match self.state {
             AppState::EnterUsername => {
                 let title = Line::from("Enter GitHub username:".bold());
-                
-                let block = Block::bordered().title(title.centered()).border_set(border::THICK);
+                let instructions = Line::from(vec![
+                    " Submit ".into(),
+                    "<Enter>".blue().bold(),
+                    " Quit ".into(),
+                    "<Q>".blue().into(),
+                ]);
+                let block = Block::bordered()
+                    .title(title.centered())
+                    .title_bottom(instructions.centered())
+                    .border_set(border::THICK);
                 
                 let input_line = format!("> {}_", self.input);
                 Paragraph::new(input_line.yellow())
                     .block(block)
                     .render(area, buf);
             }
+            AppState::Loading => {
+                let block = Block::bordered()
+                    .title(Line::from("Loading".bold()).centered())
+                    .border_set(border::THICK);
+                Paragraph::new("Fetching repositories...")
+                    .centered()
+                    .block(block)
+                    .render(area, buf);
+            }
             AppState::ShowRepos => {
-                let title = Line::from("Repositories:".bold());
+                let title = Line::from("Repositories".bold());
+                
+                let instructions = Line::from(vec![
+                    " Move ".into(),
+                    "<Up/Down>".blue().bold(),
+                    " Quit ".into(),
+                    "<Q>".blue().into(),
+                ]);
+                
                 let lines: Vec<Line> = self.repos.iter().enumerate().map(|(i, repo)| {
                     let text = if i == self.selected {
                         repo.name.clone().bold().green()
@@ -195,8 +254,13 @@ impl Widget for &App {
                     Line::from(text)
                 }).collect();
                 
-                let block = Block::bordered().title(title.centered()).border_set(border::THICK);
-                Paragraph::new(Text::from(lines)).block(block).render(area, buf);
+                let block = Block::bordered()
+                    .title(title.centered())
+                    .title_bottom(instructions.centered())
+                    .border_set(border::THICK);
+                Paragraph::new(Text::from(lines))
+                    .block(block)
+                    .render(area, buf);
             }
         }
     }
