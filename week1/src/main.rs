@@ -33,7 +33,7 @@ pub struct GithubClient {
 }
 
 impl GithubClient {
-    pub fn new(token: String) -> Self {
+    pub fn new() -> Self {
         Self {
             // token,
             client: reqwest::blocking::Client::new(),
@@ -68,7 +68,7 @@ pub struct Repo {
 impl Default for App {
     fn default() -> Self {
         Self {
-            github: GithubClient::new(String::new()),
+            github: GithubClient::new(),
             state: AppState::default(),
             input: String::new(),
             repos: Vec::new(),
@@ -94,6 +94,7 @@ pub struct App {
 #[derive(Debug)]
 pub enum AppState {
     EnterUsername,
+    Loading,    
     ShowRepos,
 }
 impl Default for AppState {
@@ -175,11 +176,13 @@ impl Widget for &App {
         match self.state {
             AppState::EnterUsername => {
                 let title = Line::from("Enter GitHub username:".bold());
-                let input_line = Line::from(self.input.clone().yellow());
                 
                 let block = Block::bordered().title(title.centered()).border_set(border::THICK);
                 
-                Paragraph::new(Text::from(vec![input_line])).block(block).render(area, buf);
+                let input_line = format!("> {}_", self.input);
+                Paragraph::new(input_line.yellow())
+                    .block(block)
+                    .render(area, buf);
             }
             AppState::ShowRepos => {
                 let title = Line::from("Repositories:".bold());
