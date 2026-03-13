@@ -1,13 +1,13 @@
-use chrono::{DateTime, Duration, Utc};
+use chrono::{DateTime, Utc};
 use color_eyre::{Result, eyre::WrapErr};
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind};
 use ratatui::{
     DefaultTerminal, Frame,
     buffer::Buffer,
     layout::Rect,
-    style::{Stylize, Style},
+    style::Stylize,
     symbols::border,
-    text::{Line, Text, Span},
+    text::{Line, Text},
     widgets::{Block, Paragraph, Widget},
 };
 use serde::{Deserialize, Serialize};
@@ -317,7 +317,7 @@ impl Widget for &App {
     fn render(self, area: Rect, buf: &mut Buffer) {
         match self.state {
             AppState::EnterUsername => {
-                let title = Line::from("Enter GitHub username:".bold());
+                let title = Line::from("  Github Repos TUI  ".bold());
                 let instructions = Line::from(vec![
                     " Submit ".into(),
                     "<enter>".blue().bold(),
@@ -330,7 +330,12 @@ impl Widget for &App {
                     .border_set(border::THICK);
 
                 let input_line = format!("> {}_", self.input);
-                Paragraph::new(input_line.yellow())
+                let text = Text::from(vec![
+                    Line::from("Enter your Github Username:").white(),
+                    Line::from(""),
+                    Line::from(input_line).yellow(),
+                ]);
+                Paragraph::new(text)
                     .block(block)
                     .render(area, buf);
             }
@@ -356,7 +361,7 @@ impl Widget for &App {
 
                 let visible_repos = &self.repos[start..end];
 
-                let title = Line::from("Repositories".bold());
+                let title = Line::from("  Repositories  ".bold());
 
                 let instructions = Line::from(vec![
                     " Move ".into(),
@@ -373,11 +378,7 @@ impl Widget for &App {
                     .enumerate()
                     .map(|(i, repo)| {
                         let abs_idx = start + i;
-                        let name = if abs_idx == self.selected {
-                            repo.name.clone().bold().green()
-                        } else {
-                            repo.name.clone().white()
-                        };
+                        let name = &repo.name;
                 
                         // create right-side info
                         let info = format!("★ {}  ⎇ {}  👁 {}", 
@@ -386,13 +387,34 @@ impl Widget for &App {
                             repo.watchers_count, 
                             // repo.language.as_deref().unwrap_or("-")
                         );
+                        let desc = repo.description
+                            .as_deref()
+                            .unwrap_or("")
+                            .lines()
+                            .next()
+                            .unwrap_or("");
                 
                         // compute padding to right-align info
                         let total_width = area.width as usize - 4; // subtract borders
+                        let left_width = total_width.saturating_sub(info.len() + 1);
+                        let mut left = if desc.is_empty() {
+                            name.to_string()
+                        } else {
+                            format!("{} - {}", name, desc)
+                        };
+                        // truncate
+                        if left.len() > left_width {
+                            left.truncate(left_width);
+                            left.push_str("…");
+                        }
                         let padding = total_width.saturating_sub(repo.name.len() + info.len());
                         let line_text = format!("{}{}{}", name, " ".repeat(padding), info);
                 
-                        Line::from(line_text)
+                        if abs_idx == self.selected {
+                            Line::from(line_text.green().bold())
+                        } else {
+                            Line::from(line_text)
+                        }
                     })
                     .collect();
                 let lines = if visible_repos.is_empty() {
